@@ -146,7 +146,7 @@ class ChatBot:
                     verify_ssl_certs=False,
                     temperature=0.2,
                     max_tokens=4096,
-                    model="GigaChat-lite"
+                    model="GigaChat-Pro"
                 )   
             reply = llm_gigachat.invoke(prompt).content
 
