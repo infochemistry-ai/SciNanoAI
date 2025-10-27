@@ -14,16 +14,7 @@ git clone git@github.com:VinaVolo/SciNanoAI.git
 
 - For Linux/MacOS system:
   ```bash
-  python3 -m venv venv
-  source venv/bin/activate
-  pip install -r requirements.txt
-  ```
-
-- For Windows system
-  ```bash
-  python -m venv venv
-  .\venv\Scripts\activate
-  pip install -r requirements.txt
+  uv sync
   ```
 
 <p>3. Download data and vectore store from S3 bucket</p>
@@ -53,14 +44,14 @@ git clone git@github.com:VinaVolo/SciNanoAI.git
 
 <h2>💻 Built with</h2>
 
-*  Run the vector database service. To do this, go to the **vector_service** folder and run the command:
+*  Run the vector database service. To do this, go to the **vector_service** folder and run the command from root dir:
       ```bash
-      uvicorn main:app --host 0.0.0.0 --port 8000
+      uvicorn vector_service.main:app --host 0.0.0.0 --port 8000
       ```
 
-*  Run the chatbot. To do this, go to the **chatbot_app** folder and run the command:
+*  Run the chatbot. To do this, go to the **chatbot_app** folder and run the command from root dir:
 	```bash
-      uvicorn main:app --host 0.0.0.0 --port 8001
+      uvicorn chatbot_app.main:app --host 0.0.0.0 --port 8001
    ```
 * To launch the application, go to the chatbot_app folder and run:
 	```bash

@@ -1,12 +1,13 @@
 import os
 from fastapi import FastAPI
-from vector_db import VectorDatabase
-from models import QueryRequest, QueryResponse, Document
+from .vector_db import VectorDatabase
+from .models import QueryRequest, QueryResponse, Document
+from src.utils.paths import get_project_path
 
 app = FastAPI()
 
 vector_db = VectorDatabase(
-    db_path=os.path.join("db", "intfloat_multilingual-e5-large"),
+    db_path=os.path.join(get_project_path(), "db", "intfloat_multilingual-e5-large"),
     model_name='intfloat/multilingual-e5-large'
 )
 

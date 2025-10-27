@@ -1,12 +1,16 @@
 import os
+import re
 import json
 import tiktoken
 import requests
 import pandas as pd
 from openai import OpenAI
-from decomposer_agent import DecomposerAgent
+from .decomposer_agent import DecomposerAgent
 from langchain_community.chat_models.gigachat import GigaChat
 from langchain_community.chat_models.yandex import ChatYandexGPT
+from dotenv import load_dotenv
+from src.utils.paths import get_project_path
+load_dotenv()
 
 class ChatBot:
     def __init__(self, llm_model):
@@ -107,22 +111,32 @@ class ChatBot:
             context = "\n\n".join(context_parts)
 
             prompt = (
-                f"You have been provided with the following contextual information:\n\n"
-                f"{context}\n\n"
-                "Based on this information, give a clear, coherent, and professional answer to the following question:\n\n"
+                # f"You have been provided with the following contextual information:\n\n"
+                # f"{context}\n\n"
+                # "Based on this information, give a clear, coherent, and professional answer to the following question:\n\n"
+                # f"Question: {question}\n\n"
+                # "Your answer should be written in a free yet professional style, using all the technical details provided in the context. Avoid structuring the "
+                # "text as lists or subheadings, except when necessary to clarify complex technical details. Focus on creating a continuous text that highlights the key technical aspects"
+                # "If there is insufficient information in the context, honestly acknowledge this, but try to suggest logical next stepsto resolve the issue"
+                # "When using data from the context, be sure to include references in square brackets. References must be formatted according to the information provided: the file name is placed in square brackets. Do not ignore this condition under any circumstances!!!"
+                # "Use only those links that are explicitly specified in the context!"
+                
+                "You have been provided with the following contextual information:\n\n"
+                f"Contest: {context}\n\n"
+                "Begin with a concise checklist (3-7 bullets) of what you will do; keep items conceptual, not implementation-level.\n\n"
+                "Based on this information, provide a clear, coherent, and professional answer to the following question:\n\n"
                 f"Question: {question}\n\n"
-                "Your answer should be written in a free yet professional style, using all the technical details provided in the context. Avoid structuring the "
-                "text as lists or subheadings, except when necessary to clarify complex technical details. Focus on creating a continuous text that highlights the key technical aspects"
-                " If there is insufficient information in the context, honestly acknowledge this, but try to suggest logical next stepsto resolve the issue"
-                "Use Russian; for specific terminology-especially with the prefix ”nano”-keep the English terms (for example, nanopil- lars)."
-                "When using data from the context, be sure to include references in square brackets. Links should be formatted according to the infor- mation provided: either the file name is placed in square brackets, or the link, formatted according to GOST R 7.0.108–2022, is also given in square brackets."
-                "Use only those links that are explicitly specified in the context."
+                "Your response should be composed in a free, professional style, incorporating all technical details from the context. Avoid structuring your text as lists or subheadings unless it is necessary to clarify complex technical details. Focus on crafting a continuous, cohesive narrative that emphasizes the key technical aspects.\n\n"
+                "If there is insufficient information in the context, acknowledge this openly, but suggest logical next steps to address the issue.\n\n"
+                "When referencing data from the context, include references in square brackets, formatted using the file name provided in the context (e.g., [file_name.pdf])!!! Adhere strictly to this referencing requirement under all circumstances!!! The square brackets should only contain the file name, nothing else!\n\n"
+                "After providing your answer, briefly validate whether all key technical details from the context were addressed and state any information gaps or uncertainties.\n\n"
+                "Only use links that are explicitly mentioned in the context! Do not introduce links from external sources!"
             )
 
         else:
             prompt = (
-                f"Answer the following question clearly, in detail, and professionally.:"
-                f"Question: {question} Please respond in Russian."
+                "Provide a clear, detailed, and professional answer to the following question:\n\n"
+                f"Question: {question}"
             )
 
         messages = self.conversation_history.copy()
@@ -149,9 +163,23 @@ class ChatBot:
                     model="GigaChat-Pro"
                 )   
             reply = llm_gigachat.invoke(prompt).content
+            
+        elif self.llm_model == "gpt-oss:latest":
+            
+            url = os.getenv("LOCAL_API_BASE")
+            headers = {"Authorization": f"Bearer {os.getenv("LOCAL_API_KEY")}"}
+            data = {
+                "model": "gpt-oss:latest",
+                "messages": messages,
+                "temperature": 0.2,
+                "max_tokens": 4096
+            }
+            
+            response = requests.post(url, headers=headers, json=data)
+            reply = response.json().get('choices')[0].get('message').get('content')
 
         else:
-            print(f"Используется модель: {self.llm_model}")    
+            print(f"Model {self.llm_model} is used. ")    
 
             messages = self.limit_tokens(messages, max_tokens=max_allowed_tokens)
 
@@ -168,10 +196,19 @@ class ChatBot:
 
         self.conversation_history.append({"role": "assistant", "content": reply})
 
-        if self.judge_answer(reply, question) == "нет." or self.judge_answer(reply, question) == "нет":
+        if self.judge_answer(reply, question) == "No" or self.judge_answer(reply, question) == "No.":
             return self.handle_incomplete_answer(question)
         
-        return reply
+        df = pd.read_csv(os.path.join(get_project_path(), "data", "updated_references_links.csv"))
+        finde_links_in_answer = self.extract_bracket_content(reply)
+        new_answer = reply
+        for link in finde_links_in_answer:
+            for i in df["filename"].values:
+                if link in i:
+                    new_link = df[df["filename"] == i].iloc[0].link_name
+                    new_answer = new_answer.replace(link, new_link)
+                
+        return new_answer
 
 
     def judge_answer(self, answer, question):
@@ -179,32 +216,58 @@ class ChatBot:
         Evaluates the given answer to the given question.
 
         The evaluation is done by creating a prompt that asks a language model to judge the answer.
-        The prompt provides the question and the answer and asks the model to respond with 'Да' if the answer is complete, accurate, and relevant and 'Нет' if the answer is incomplete or inaccurate.
+        The prompt provides the question and the answer and asks the model to respond with 'Yes' if the answer is complete, accurate, and relevant and 'No' if the answer is incomplete or inaccurate.
 
         Args:
             answer (str): The answer to be evaluated.
             question (str): The question that the answer is supposed to answer.
 
         Returns:
-            str: The verdict of the language model, either 'Да' or 'Нет'.
+            str: The verdict of the language model, either 'Yes' or 'No'.
         """
         prompt = (
-            f"Evaluate whether the following answer complies with the given question. The answer must be complete, accurate, and relevant:\n\n"
+            # f"Evaluate whether the following answer complies with the given question. The answer must be complete, accurate, and relevant:\n\n"
+            # f"Question: {question}\n\n"
+            # f"Answer: {answer}\n\n"
+            # "If the answer indicates that the information is insufficient, the question remains open, or the context does not contain an answer, answer 'No' "
+            # "If the answer fully meets the criteria of accuracy, completeness, and relevance, answer 'Yes' "
+            
+            "Assess whether the provided answer satisfies the requirements stated in the question. Ensure the answer is complete, accurate, and relevant to the question.\n\n"
+            "Begin with a concise checklist (3-5 bullets) summarizing the criteria you will evaluate: (1) Completeness relative to the question, (2) Factual accuracy, (3) Relevance to the question, (4) Explicit coverage of all requirements, (5) Absence of ambiguity or open issues.\n\n"
             f"Question: {question}\n\n"
             f"Answer: {answer}\n\n"
-            "If the answer indicates that the information is insufficient, the question remains open, or the context does not contain an answer, answer 'No' "
-            "If the answer fully meets the criteria of accuracy, completeness, and relevance, answer 'Yes' "
+            "Instructions:\n\n"
+            "- If the answer states that the information is insufficient, the question is still open, or the context does not provide an answer, reply with 'No'.\n\n"
+            "- If the answer is fully accurate, complete, and relevant, reply with 'Yes'.\n\n"
+            "- If the answer is partially correct, only somewhat complete or relevant, reply with 'No'.\n\n"
+            "- For any ambiguous or borderline cases where it is unclear whether the criteria are fully met, default to 'No' to maintain strict compliance.\n\n"
+            "After making your assessment, validate your choice in 1-2 lines by explicitly stating which checklist items are satisfied or not.\n\n"
+            "The output format must be either “Yes” or “No”.\n\n"
+            
         )
 
-        openai_client = OpenAI(base_url=self.openai_api_base)
-        response = openai_client.chat.completions.create(
-            model="openai/gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=10,
-            temperature=0,
-        )
+        # openai_client = OpenAI(base_url=self.openai_api_base)
+        # response = openai_client.chat.completions.create(
+        #     model="openai/gpt-4o-mini",
+        #     messages=[{"role": "user", "content": prompt}],
+        #     max_tokens=10,
+        #     temperature=0,
+        # )
+        # verdict = response.choices[0].message.content.strip().lower()
+        
+            
+        url = os.getenv("LOCAL_API_BASE")
+        headers = {"Authorization": f"Bearer {os.getenv("LOCAL_API_KEY")}"}
+        data = {
+            "model": "gpt-oss:latest",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0,
+            "max_tokens": 10
+        }
+        
+        response = requests.post(url, headers=headers, json=data)
+        verdict = response.json().get('choices')[0].get('message').get('content')
 
-        verdict = response.choices[0].message.content.strip().lower()
         return verdict
 
     def handle_incomplete_answer(self, question):
@@ -227,15 +290,28 @@ class ChatBot:
             "Suggest a revised version of the question."
         )
 
-        openai_client = OpenAI(base_url=self.openai_api_base)
-        response = openai_client.chat.completions.create(
-            model="openai/gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=100,
-            temperature=0.5,
-        )
+        # openai_client = OpenAI(base_url=self.openai_api_base)
+        # response = openai_client.chat.completions.create(
+        #     model="openai/gpt-4o-mini",
+        #     messages=[{"role": "user", "content": prompt}],
+        #     max_tokens=100,
+        #     temperature=0.5,
+        # )
 
-        reformulated_question = response.choices[0].message.content.strip()
+        # reformulated_question = response.choices[0].message.content.strip()
+        
+        url = os.getenv("LOCAL_API_BASE")
+        headers = {"Authorization": f"Bearer {os.getenv("LOCAL_API_KEY")}"}
+        data = {
+            "model": "gpt-oss:latest",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.5,
+            "max_tokens": 100
+        }
+        
+        response = requests.post(url, headers=headers, json=data)
+        reformulated_question = response.json().get('choices')[0].get('message').get('content')
+        
         return self.generate_response(reformulated_question)
 
     def summarize_messages(self, messages):
@@ -261,21 +337,33 @@ class ChatBot:
             conversation += f"{role}: {message['content']}\n"
 
         prompt = (
-            "Briefly summarize the following dialogue between the user and the assistant, preserving the important details. "
-            "Please respond in Russian..\n\n" + conversation
+            f"Begin with a concise checklist (3-7 bullets) describing the major elements or events in the conversation. Then, provide a concise summary of the following conversation between the user and the assistant, ensuring that all key details are retained: {conversation}.\n\n"
+            "After generating the summary, validate that all significant points and facts have been included and correct the summary if any important detail is missing."
         )
 
         messages = [{"role": "user", "content": prompt}]
 
-        openai_client = OpenAI(base_url=self.openai_api_base)
-
-        response = openai_client.chat.completions.create(
-            model="openai/gpt-4o-mini",
-            messages=messages,
-            max_tokens=4096,
-            temperature=0.2,
-        )
-        summary = response.choices[0].message.content.strip()
+        # openai_client = OpenAI(base_url=self.openai_api_base)
+        # response = openai_client.chat.completions.create(
+        #     model="openai/gpt-4o-mini",
+        #     messages=messages,
+        #     max_tokens=4096,
+        #     temperature=0.2,
+        # )
+        # summary = response.choices[0].message.content.strip()
+        
+        url = os.getenv("LOCAL_API_BASE")
+        headers = {"Authorization": f"Bearer {os.getenv("LOCAL_API_KEY")}"}
+        data = {
+            "model": "gpt-oss:latest",
+            "messages": messages,
+            "temperature": 0.2,
+            "max_tokens": 4096
+        }
+        
+        response = requests.post(url, headers=headers, json=data)
+        summary = response.json().get('choices')[0].get('message').get('content')
+        
         return summary
 
     def count_tokens(self, messages):
@@ -315,3 +403,6 @@ class ChatBot:
             limited_messages.insert(0, message)
             total_tokens += message_tokens
         return limited_messages
+
+    def extract_bracket_content(self, text: str):
+        return re.findall(r'\[(.*?)\]', text)
